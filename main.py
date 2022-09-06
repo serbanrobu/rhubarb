@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from nat import Nat
 from seq import Seq, Nil, lookup, Cons
-from option import Some
+from option import Some, Option
 
 
 @dataclass(frozen=True)
@@ -43,19 +43,18 @@ Context = Seq[tuple[str, Expr]]
 
 
 class Assoc(Enum):
-    NONE = 0
     LEFT = 1
     RIGHT = 2
     BOTH = 3
 
 
-def show(expr: Expr, ctx: Context = Nil(), assoc: Assoc = Assoc.BOTH) -> str:
+def show(expr: Expr, ctx: Context = Nil(), assoc: Option[Assoc] = Some(Assoc.BOTH)) -> str:
     match expr:
         case App(fun, arg):
-            result = f'{show(fun, ctx, Assoc.LEFT)} {show(arg, ctx, Assoc.NONE)}'
+            result = f'{show(fun, ctx, Some(Assoc.LEFT))} {show(arg, ctx, None)}'
 
             match assoc:
-                case Assoc.LEFT | Assoc.BOTH:
+                case Some(Assoc.LEFT | Assoc.BOTH):
                     return result
 
                 case _:
@@ -65,7 +64,7 @@ def show(expr: Expr, ctx: Context = Nil(), assoc: Assoc = Assoc.BOTH) -> str:
             result = f'λ ({var} : {show(type, ctx)}). {show(body, Cons((var, type), ctx))}'
 
             match assoc:
-                case Assoc.RIGHT | Assoc.BOTH:
+                case Some(Assoc.RIGHT | Assoc.BOTH):
                     return result
 
                 case _:
@@ -75,7 +74,7 @@ def show(expr: Expr, ctx: Context = Nil(), assoc: Assoc = Assoc.BOTH) -> str:
             result = f'Π ({var} : {show(type, ctx)}). {show(body, Cons((var, type), ctx))}'
 
             match assoc:
-                case Assoc.RIGHT | Assoc.BOTH:
+                case Some(Assoc.RIGHT | Assoc.BOTH):
                     return result
 
                 case _:
