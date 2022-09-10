@@ -1,9 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from nat import Nat
-from seq import Seq, Nil, lookup, Cons
-from option import Some, Option
+from typing import Any, Callable, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -26,96 +24,90 @@ class Pi:
     body: Expr
 
 
-@dataclass(frozen=True)
-class U:
-    level: Nat = Nat(0)
+@dataclass
+class Unknown:
+    pass
 
 
 @dataclass(frozen=True)
 class Var:
-    index: Nat
+    index: int
 
 
-Expr = App | Lam | Pi | U | Var
+Expr = App | Lam | Pi | Unknown | Var
 
 
-Context = Seq[tuple[str, Expr]]
+Context = List[Tuple[str, Expr]]
 
 
 class Assoc(Enum):
-    LEFT = 1
-    RIGHT = 2
-    BOTH = 3
+    LEFT = 0
+    RIGHT = 1
+    BOTH = 2
 
 
-def show(expr: Expr, ctx: Context = Nil(), assoc: Option[Assoc] = Some(Assoc.BOTH)) -> str:
+def show(expr: Expr, ctx: Context = [], assoc: Optional[Assoc] = Assoc.BOTH) -> str:
     match expr:
         case App(fun, arg):
-            result = f'{show(fun, ctx, Some(Assoc.LEFT))} {show(arg, ctx, None)}'
+            result = f'{show(fun, ctx, Assoc.LEFT)} {show(arg, ctx, None)}'
 
             match assoc:
-                case Some(Assoc.LEFT | Assoc.BOTH):
+                case Assoc.LEFT | Assoc.BOTH:
                     return result
 
                 case _:
                     return f'({result})'
 
         case Lam(var, type, body):
-            result = f'λ ({var} : {show(type, ctx)}). {show(body, Cons((var, type), ctx))}'
+            result = f'λ ({var} : {show(type, ctx)}). {show(body, [(var, type), *ctx])}'
 
             match assoc:
-                case Some(Assoc.RIGHT | Assoc.BOTH):
+                case Assoc.RIGHT | Assoc.BOTH:
                     return result
 
                 case _:
                     return f'({result})'
 
         case Pi(var, type, body):
-            result = f'Π ({var} : {show(type, ctx)}). {show(body, Cons((var, type), ctx))}'
+            result = f'Π ({var} : {show(type, ctx)}). {show(body, [(var, type), *ctx])}'
 
             match assoc:
-                case Some(Assoc.RIGHT | Assoc.BOTH):
+                case Assoc.RIGHT | Assoc.BOTH:
                     return result
 
                 case _:
                     return f'({result})'
 
-        case U(level):
-            return 'U' + chr(0x2080 + int(level))
+        case Unknown():
+            return '?'
 
         case Var(index):
-            match lookup(index, ctx):
-                case None:
-                    raise Exception(
-                        f'\n{show_context(ctx)}Out of bounds: {index}',
-                    )
-
-                case Some((name, _)):
-                    return name
+            name, _ = ctx[index]
+            return name
 
 
-def shift(expr: Expr, n: int, cutoff: Nat = Nat(0)) -> Expr:
+def shift(expr: Expr, n: int, cutoff: int = 0) -> Expr:
     match expr:
         case App(fun, arg):
             return App(shift(fun, n, cutoff), shift(arg, n, cutoff))
 
         case Lam(var, type, body):
-            return Lam(var, shift(type, n, cutoff), shift(body, n, cutoff + Nat(1)))
+            return Lam(var, shift(type, n, cutoff), shift(body, n, cutoff + 1))
 
         case Pi(var, type, body):
-            return Pi(var, shift(type, n, cutoff), shift(body, n, cutoff + Nat(1)))
+            return Pi(var, shift(type, n, cutoff), shift(body, n, cutoff + 1))
 
-        case U(_):
+        case Unknown():
             return expr
 
         case Var(index):
             if index < cutoff:
                 return expr
             else:
-                return Var(Nat(int(index) + n))
+                return Var(index + n)
 
 
-def substitute(expr: Expr, val: Expr, i: Nat = Nat(0)) -> Expr:
+def substitute(expr: Expr, val: Expr, i: int = 0) -> Expr:
     match expr:
         case App(fun, arg):
             return App(substitute(fun, val, i), substitute(arg, val, i))
@@ -124,17 +116,17 @@ def substitute(expr: Expr, val: Expr, i: Nat = Nat(0)) -> Expr:
             return Lam(
                 var,
                 substitute(type, val, i),
-                substitute(body, shift(val, 1), i + Nat(1)),
+                substitute(body, shift(val, 1), i + 1),
             )
 
         case Pi(var, type, body):
             return Pi(
                 var,
                 substitute(type, val, i),
-                substitute(body, shift(val, 1), i + Nat(1)),
+                substitute(body, shift(val, 1), i + 1),
             )
 
-        case U(_):
+        case Unknown():
             return expr
 
         case Var(index):
@@ -172,22 +164,21 @@ def reduce(expr: Expr) -> Expr:
 
 def show_context(ctx: Context) -> str:
     match ctx:
-        case Nil():
-            return ''
-
-        case Cons((var, type), tail):
+        case [(var, type), *tail]:
             return f'{show_context(tail)}{var} : {show(type, tail)}\n'
 
+        case _:
+            return ''
 
-def type_check(expr: Expr, ctx: Context = Nil()) -> Expr:
+
+def type_check(expr: Expr, ctx: Context = []) -> Expr:
     match expr:
         case App(fun, arg):
             fun_type = type_check(fun, ctx)
             match fun_type:
                 case Pi(var, type, body):
-                    arg_type = type_check(arg, ctx)
                     match type_check(type, ctx):
-                        case U(_):
+                        case Unknown():
                             pass
 
                         case other:
@@ -195,7 +186,9 @@ def type_check(expr: Expr, ctx: Context = Nil()) -> Expr:
                                 f'\n{show_context(ctx)}Expecting a type, found {show(type, ctx)} : {show(other, ctx)}'
                             )
 
-                    if arg_type != type:
+                    arg_type = type_check(arg, ctx)
+
+                    if not is_subexpr(type, arg_type):
                         raise Exception(
                             f'\n{show_context(ctx)}Expecting a {show(type, ctx)}, found {show(arg, ctx)} : {show(arg_type, ctx)}'
                         )
@@ -208,42 +201,64 @@ def type_check(expr: Expr, ctx: Context = Nil()) -> Expr:
                     )
 
         case Lam(var, type, body):
-            type_type = type_check(type, ctx)
-            match type_type:
-                case U(_):
-                    return Pi(
-                        var,
-                        type,
-                        type_check(body, Cons((var, type), ctx)),
-                    )
+            type_check(type, ctx)
 
-                case other:
-                    raise Exception(
-                        f'\n{show_context(ctx)}Expecting a type, found {show(other, ctx)} : {show(type_type, ctx)}'
-                    )
+            return Pi(
+                var,
+                type,
+                type_check(body, [(var, type), *ctx]),
+            )
 
         case Pi(var, type, body):
-            match type_check(type, ctx), type_check(body, Cons((var, type), ctx)):
-                case U(l1), U(l2):
-                    return U(max(l1, l2))
+            type_check(type, ctx)
+            type_check(body, [(var, type), *ctx])
+            return Unknown()
 
-                case x, y:
-                    raise Exception(
-                        f'\n{show_context(ctx)}Assertion failed: {show(x, ctx)} == {show(y, ctx)}'
-                    )
-
-        case U(level):
-            return U(level + Nat(1))
+        case Unknown():
+            return expr
 
         case Var(index):
-            match lookup(index, ctx):
-                case None:
-                    raise Exception(
-                        f'\n{show_context(ctx)}Out of bounds: {index}'
-                    )
+            _, type = ctx[index]
+            return shift(type, int(index) + 1)
 
-                case Some((_, type)):
-                    return shift(type, int(index) + 1)
+
+def is_subexpr(expr1: Expr, expr2: Expr) -> bool:
+    match expr1, expr2:
+        case App(fun1, arg1), App(fun2, arg2):
+            return is_subexpr(fun1, fun2) and is_subexpr(arg1, arg2)
+
+        case Lam(_, type1, body1), Lam(_, type2, body2):
+            return is_subexpr(type1, type2) and is_subexpr(body1, body2)
+
+        case Pi(_, type1, body1), Pi(_, type2, body2):
+            return is_subexpr(type1, type2) and is_subexpr(body1, body2)
+
+        case Unknown(), _:
+            return True
 
         case _:
-            raise Exception('TODO')
+            return expr1 == expr2
+
+
+Value = Any | Callable[[Any], Any]
+
+Env = List[Value]
+
+
+def eval(expr: Expr, env: Env = []) -> Value:
+    match expr:
+        case App(fun, arg):
+            f = eval(fun, env)
+            return None if f is None else f(eval(arg, env))
+
+        case Lam(_, _, body):
+            return lambda val: eval(body, [val, *env])
+
+        case Pi(_, _, _):
+            return None
+
+        case Unknown():
+            return None
+
+        case Var(index):
+            return env[index]
