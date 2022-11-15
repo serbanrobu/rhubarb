@@ -1,9 +1,9 @@
 from main import *
 
 ctx: Context = [
-    ('C', Unknown()),
-    ('B', Unknown()),
-    ('A', Unknown()),
+    ('C', Unknown(), None),
+    ('B', Unknown(), None),
+    ('A', Unknown(), None),
 ]
 
 e = Lam(
@@ -46,6 +46,7 @@ ctx = [
                 Var(1),
             ),
         ),
+        None,
     ),
     (
         'fst',
@@ -58,6 +59,7 @@ ctx = [
                 Var(1),
             ),
         ),
+        None,
     ),
     (
         'pair',
@@ -78,8 +80,13 @@ ctx = [
                 ),
             ),
         ),
+        None,
     ),
-    ('Pair', Pi('_', Unknown(), Pi('_', Unknown(), Unknown()))),
+    (
+        'Pair',
+        Pi('_', Unknown(), Pi('_', Unknown(), Unknown())),
+        None,
+    ),
 ]
 
 e = Lam(
@@ -108,9 +115,9 @@ def test_swap() -> None:
 
 
 ctx = [
-    ('succ', Pi('_', Var(1), Var(2))),
-    ('0', Var(0)),
-    ('Nat', Unknown()),
+    ('succ', Pi('_', Var(1), Var(2)), None),
+    ('0', Var(0), None),
+    ('Nat', Unknown(), None),
     *ctx,
 ]
 
@@ -130,6 +137,9 @@ e1 = App(App(Var(4), Var(2)), e)
 
 def test_nat_1() -> None:
     type_check(e1, ctx)
+
+
+print(show(e1, ctx))
 
 
 def succ(n: int) -> int:
@@ -172,3 +182,51 @@ def test_nat_2() -> None:
 
 def test_eval_nat_2() -> None:
     assert eval(e2, env) == 2
+
+
+def test_pq_nq_np() -> None:
+    ctx = [
+        (
+            'Not',
+            Pi('_', Unknown(), Unknown()),
+            Lam('A', Unknown(), Pi('_', Var(0), Var(2))),
+        ),
+        ('Void', Unknown(), None),
+    ]
+
+    e = Lam(
+        'P',
+        Unknown(),
+        Lam(
+            'Q',
+            Unknown(),
+            Lam(
+                'pq',
+                Pi(
+                    '_',
+                    Var(1),  # P
+                    Var(1),  # Q
+                ),
+                Lam(
+                    'nq',
+                    App(
+                        Var(3),  # Not
+                        Var(1),  # Q
+                    ),
+                    Lam(
+                        'p',
+                        Var(3),  # P
+                        App(
+                            Var(1),  # nq
+                            App(
+                                Var(2),  # pq
+                                Var(0),  # p
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    type_check(e, ctx)

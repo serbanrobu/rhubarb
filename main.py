@@ -18,6 +18,13 @@ class Lam:
 
 
 @dataclass(frozen=True)
+class Let:
+    var: str = field(compare=False)
+    term: Expr
+    body: Expr
+
+
+@dataclass(frozen=True)
 class Pi:
     var: str = field(compare=False)
     type: Expr
@@ -34,10 +41,10 @@ class Var:
     index: int
 
 
-Expr = App | Lam | Pi | Unknown | Var
+Expr = App | Lam | Let | Pi | Unknown | Var
 
 
-Context = List[Tuple[str, Expr]]
+Context = List[Tuple[str, Expr, Optional[Expr]]]
 
 
 class Assoc(Enum):
@@ -59,7 +66,17 @@ def show(expr: Expr, ctx: Context = [], assoc: Optional[Assoc] = Assoc.BOTH) -> 
                     return f'({result})'
 
         case Lam(var, type, body):
-            result = f'λ ({var} : {show(type, ctx)}). {show(body, [(var, type), *ctx])}'
+            result = f'λ ({var} : {show(type, ctx)}). {show(body, [(var, type, None), *ctx])}'
+
+            match assoc:
+                case Assoc.RIGHT | Assoc.BOTH:
+                    return result
+
+                case _:
+                    return f'({result})'
+
+        case Let(var, term, body):
+            result = f'let {var} ≡ {show(term, ctx)} in {show(body, [(var, Unknown(), term), *ctx])}'
 
             match assoc:
                 case Assoc.RIGHT | Assoc.BOTH:
@@ -69,7 +86,7 @@ def show(expr: Expr, ctx: Context = [], assoc: Optional[Assoc] = Assoc.BOTH) -> 
                     return f'({result})'
 
         case Pi(var, type, body):
-            result = f'Π ({var} : {show(type, ctx)}). {show(body, [(var, type), *ctx])}'
+            result = f'Π ({var} : {show(type, ctx)}). {show(body, [(var, type, None), *ctx])}'
 
             match assoc:
                 case Assoc.RIGHT | Assoc.BOTH:
@@ -82,7 +99,7 @@ def show(expr: Expr, ctx: Context = [], assoc: Optional[Assoc] = Assoc.BOTH) -> 
             return '?'
 
         case Var(index):
-            name, _ = ctx[index]
+            name, _, _ = ctx[index]
             return name
 
 
@@ -93,6 +110,9 @@ def shift(expr: Expr, n: int, cutoff: int = 0) -> Expr:
 
         case Lam(var, type, body):
             return Lam(var, shift(type, n, cutoff), shift(body, n, cutoff + 1))
+
+        case Let(var, term, body):
+            return Let(var, shift(term, n, cutoff), shift(body, n, cutoff + 1))
 
         case Pi(var, type, body):
             return Pi(var, shift(type, n, cutoff), shift(body, n, cutoff + 1))
@@ -119,6 +139,13 @@ def substitute(expr: Expr, val: Expr, i: int = 0) -> Expr:
                 substitute(body, shift(val, 1), i + 1),
             )
 
+        case Let(var, term, body):
+            return Let(
+                var,
+                substitute(term, val, i),
+                substitute(body, shift(val, 1), i + 1),
+            )
+
         case Pi(var, type, body):
             return Pi(
                 var,
@@ -133,30 +160,37 @@ def substitute(expr: Expr, val: Expr, i: int = 0) -> Expr:
             return val if index == i else expr
 
 
-def value(expr: Expr) -> Expr:
+def value(expr: Expr, ctx: Context = []) -> Expr:
     match expr:
         case App(fun, arg):
-            match value(fun):
+            match value(fun, ctx):
                 case Lam(_, _, body):
-                    return value(shift(substitute(body, shift(arg, 1)), -1))
+                    return value(shift(substitute(body, shift(arg, 1)), -1), ctx)
 
                 case _:
                     raise Exception('Expecting a lambda')
+
+        case Let(var, term, body):
+            return value(body, [(var, Unknown(), term), *ctx])
+
+        case Var(index):
+            _, _, term = ctx[index]
+            return expr if term is None else shift(term, int(index) + 1)
 
         case _:
             return expr
 
 
-def reduce(expr: Expr) -> Expr:
-    match value(expr):
+def reduce(expr: Expr, ctx: Context = []) -> Expr:
+    match value(expr, ctx):
         case App(fun, arg):
-            return App(reduce(fun), reduce(arg))
+            return App(reduce(fun, ctx), reduce(arg, ctx))
 
         case Lam(var, type, body):
-            return Lam(var, reduce(type), reduce(body))
+            return Lam(var, reduce(type, ctx), reduce(body, [(var, type, None), *ctx]))
 
         case Pi(var, type, body):
-            return Pi(var, reduce(type), reduce(body))
+            return Pi(var, reduce(type, ctx), reduce(body, [(var, type, None), *ctx]))
 
         case _:
             return expr
@@ -164,8 +198,9 @@ def reduce(expr: Expr) -> Expr:
 
 def show_context(ctx: Context) -> str:
     match ctx:
-        case [(var, type), *tail]:
-            return f'{show_context(tail)}{var} : {show(type, tail)}\n'
+        case [(var, type, term), *tail]:
+            t = '' if term is None else f' ≡ {show(term, tail)}'
+            return f'{show_context(tail)}{var} : {show(type, tail)}{t}\n'
 
         case _:
             return ''
@@ -174,8 +209,7 @@ def show_context(ctx: Context) -> str:
 def type_check(expr: Expr, ctx: Context = []) -> Expr:
     match expr:
         case App(fun, arg):
-            fun_type = type_check(fun, ctx)
-            match fun_type:
+            match value(type_check(fun, ctx), ctx):
                 case Pi(var, type, body):
                     match type_check(type, ctx):
                         case Unknown():
@@ -197,7 +231,7 @@ def type_check(expr: Expr, ctx: Context = []) -> Expr:
 
                 case other:
                     raise Exception(
-                        f'\n{show_context(ctx)}Expecting a function, found {show(other, ctx)} : {show(fun_type, ctx)}'
+                        f'\n{show_context(ctx)}Expecting a function, found {show(fun, ctx)} : {show(other, ctx)}'
                     )
 
         case Lam(var, type, body):
@@ -206,20 +240,24 @@ def type_check(expr: Expr, ctx: Context = []) -> Expr:
             return Pi(
                 var,
                 type,
-                type_check(body, [(var, type), *ctx]),
+                type_check(body, [(var, type, None), *ctx]),
             )
+
+        case Let(var, term, body):
+            type = type_check(term, ctx)
+            return type_check(body, [(var, type, term), *ctx])
 
         case Pi(var, type, body):
             type_check(type, ctx)
-            type_check(body, [(var, type), *ctx])
+            type_check(body, [(var, type, None), *ctx])
             return Unknown()
 
         case Unknown():
             return expr
 
         case Var(index):
-            _, type = ctx[index]
-            return shift(type, int(index) + 1)
+            _, type, _ = ctx[index]
+            return shift(type, index + 1)
 
 
 def is_subexpr(expr1: Expr, expr2: Expr) -> bool:
@@ -253,6 +291,9 @@ def eval(expr: Expr, env: Env = []) -> Value:
 
         case Lam(_, _, body):
             return lambda val: eval(body, [val, *env])
+
+        case Let(_, term, body):
+            return eval(body, [eval(term, env), *env])
 
         case Pi(_, _, _):
             return None
